@@ -15,21 +15,17 @@ RUN CGO_ENABLED=0 \
   go build \
   -trimpath \
   -ldflags '-w -s -buildid=' \
-  -v -o terminal ./cmd/terminal
+  -v -o migrate ./cmd/migrate
 
 # Server
 FROM whatwewant/alpine:v3-1
 
 LABEL MAINTAINER="Zero<tobewhatwewant@gmail.com>"
 
-LABEL org.opencontainers.image.source="https://github.com/go-zoox/terminal"
+LABEL org.opencontainers.image.source="https://github.com/go-idp/migrate"
 
-ARG VERSION=latest
+COPY --from=builder /build/migrate /bin
 
-ENV TERMINAL_VERSION=${VERSION}
+RUN migrate --version
 
-COPY --from=builder /build/terminal /bin
-
-RUN terminal --version
-
-CMD terminal server
+# CMD migrate server
