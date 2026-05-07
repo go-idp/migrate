@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"migrate/internal/migrate"
+	mg "github.com/go-idp/migrate"
+	"github.com/go-idp/migrate/internal/migrate"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/go-zoox/cli"
@@ -18,7 +19,7 @@ func main() {
 		Name:      "migrate",
 		Usage:     "database sql migrations",
 		UsageText: usageText,
-		Version:   "1.0.0",
+		Version:   mg.Version,
 		HideHelp:  true,
 		Flags: []cli.Flag{
 			&cli.StringFlag{

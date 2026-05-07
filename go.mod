@@ -1,4 +1,4 @@
-module migrate
+module github.com/go-idp/migrate
 
 go 1.25.0
 
