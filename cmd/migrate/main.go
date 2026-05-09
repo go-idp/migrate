@@ -16,11 +16,11 @@ import (
 func main() {
 	// Build the CLI interface and bind flags to env vars.
 	app := cli.NewSingleProgram(&cli.SingleProgramConfig{
-		Name:      "migrate",
-		Usage:     "database sql migrations",
-		UsageText: usageText,
-		Version:   mg.Version,
-		HideHelp:  true,
+		Name:  "migrate",
+		Usage: "database sql migrations",
+		// UsageText: usageText,
+		Version: mg.Version,
+		// HideHelp: true,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "driver",
@@ -29,8 +29,9 @@ func main() {
 				EnvVars: []string{"DB_DRIVER"},
 			},
 			&cli.StringFlag{
-				Name:    "host",
-				Aliases: []string{"h"},
+				Name: "host",
+				// TODO: add aliases, cause urfave/cli panic
+				// Aliases: []string{"h"},
 				Usage:   "database host",
 				EnvVars: []string{"DB_HOST"},
 			},
