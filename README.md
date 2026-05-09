@@ -7,7 +7,8 @@ A production-grade Go database migration CLI for MySQL, MariaDB, PostgreSQL, and
 - Supported drivers: `mysql`, `mariadb`, `postgres`, `sqlite3`
 - Migration state is stored in a database table (default: `migrations`)
 - Automatically creates the migration history table on startup
-- Re-running the tool safely skips already applied sequences
+- **diff** mode (default): already-recorded sequences are skipped
+- **all** mode: every migration SQL runs again; existing history rows are upserted (`checksum`, `name`, `version_tag`, `executed_at`)
 - Migration files are sorted and executed by sequence in ascending order
 - Supports both DDL and DML migrations (idempotent DML is recommended)
 - Logging is powered by `github.com/go-zoox/logger`
@@ -32,6 +33,8 @@ Environment variables:
 - `DB_USER`
 - `DB_PASS`
 - `DB_NAME`
+- `MIGRATE_MODE` (`diff` \| `all`, default `diff`)
+- `MIGRATE_DIR` (migrations directory; default `./migrations`)
 
 CLI flags:
 
@@ -41,13 +44,14 @@ CLI flags:
 - `-u` username
 - `-p` password
 - `-d` database name (required)
-- `-m` migrations directory (default: `./migrations`)
-- `-t` migrations history table (default: `migrations`)
+- `-m`, `--mode` run mode: `diff` (default) or `all`
+- `-r`, `--migrations-dir` migrations directory (default: `./migrations`)
+- `-t`, `--migrations-table` migrations history table (default: `migrations`)
 
 ## Usage
 
 ```bash
-migrate -D <driver> -h <host> -P <port> -u <user> -p <password> -d <database> [-m <migrations_dir>] [-t <migrations_table>]
+migrate -D <driver> -h <host> -P <port> -u <user> -p <password> -d <database> [options]
 ```
 
 Example (CLI only):
@@ -70,7 +74,7 @@ DB_NAME=app_db \
 
 ## Migration File Specification
 
-- Default directory: `./migrations` (overridable with `-m`)
+- Default directory: `./migrations` (override with `-r` / `--migrations-dir` or `MIGRATE_DIR`)
 - Filename format: `<sequence>_<module>_<business_desc>.<version>.sql`
 - Example: `99_user_add_age.v2026.05.06.sql`
 - Sequence extraction rule: the numeric part before the first underscore
@@ -81,7 +85,7 @@ DB_NAME=app_db \
 
 - Default table name: `migrations` (overridable with `-t`)
 - Built-in unique constraint ensures one execution per sequence
-- Re-running the CLI skips sequences that are already recorded
+- In **diff** mode, recorded sequences are skipped; **all** mode upserts an existing row for that sequence after re-running its SQL
 
 ## Testing
 
@@ -95,3 +99,4 @@ Current test coverage includes:
 - Migration filename validation, sorting, and duplicate sequence detection
 - SQLite integration: rerun skip logic and custom migration table support
 - Real-world scenarios: DDL + idempotent DML + failure stop and record checks
+- Run modes: `diff` vs `all` (SQLite upsert / checksum refresh)

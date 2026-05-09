@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/go-zoox/logger"
 )
@@ -31,9 +32,9 @@ func NewRunner(db *sql.DB, driver string, tableName string) *Runner {
 	}
 }
 
-// Run applies pending migrations in ascending sequence order.
-func (r *Runner) Run(dir string) error {
-	logger.Infof("starting migration run: dir=%s table=%s driver=%s", dir, r.tableName, r.driver)
+// Run applies migrations in ascending sequence order according to mode.
+func (r *Runner) Run(dir string, mode RunMode) error {
+	logger.Infof("starting migration run: mode=%s dir=%s table=%s driver=%s", mode, dir, r.tableName, r.driver)
 
 	logger.Infof("ensure migrations table exists")
 	if err := r.ensureMigrationsTable(); err != nil {
@@ -59,24 +60,46 @@ func (r *Runner) Run(dir string) error {
 	for idx, migration := range migrations {
 		current := idx + 1
 
-		if _, done := executedSequences[migration.Sequence]; done {
-			logger.Warnf(
-				"[%d/%d] skip %s (already executed)",
+		if mode == RunModeDiff {
+			if _, done := executedSequences[migration.Sequence]; done {
+				logger.Infof(
+					"[%d/%d] Ignored %s (already executed)",
+					current,
+					total,
+					migration.Name,
+				)
+				skippedCount++
+				continue
+			}
+		}
+
+		if mode == RunModeAll {
+			if _, done := executedSequences[migration.Sequence]; done {
+				logger.Infof(
+					"[%d/%d] reapplying %s (mode=all) ...",
+					current,
+					total,
+					migration.Name,
+				)
+			} else {
+				logger.Infof(
+					"[%d/%d] applying %s ...",
+					current,
+					total,
+					migration.Name,
+				)
+			}
+		} else {
+			logger.Infof(
+				"[%d/%d] applying %s ...",
 				current,
 				total,
 				migration.Name,
 			)
-			skippedCount++
-			continue
 		}
 
-		logger.Infof(
-			"[%d/%d] applying %s ...",
-			current,
-			total,
-			migration.Name,
-		)
-		if err := r.applyMigration(migration); err != nil {
+		rowsAffected, rowsKnown, elapsed, err := r.applyMigration(migration, mode)
+		if err != nil {
 			logger.Errorf(
 				"[%d/%d] failed to migrate %s: %v",
 				current,
@@ -87,17 +110,30 @@ func (r *Runner) Run(dir string) error {
 			return err
 		}
 
-		logger.Infof(
-			"[%d/%d] applied %s",
-			current,
-			total,
-			migration.Name,
-		)
+		if rowsKnown {
+			logger.Infof(
+				"[%d/%d] applied %s (rows_affected=%d, elapsed=%s)",
+				current,
+				total,
+				migration.Name,
+				rowsAffected,
+				elapsed.String(),
+			)
+		} else {
+			logger.Infof(
+				"[%d/%d] applied %s (elapsed=%s)",
+				current,
+				total,
+				migration.Name,
+				elapsed.String(),
+			)
+		}
 		appliedCount++
 	}
 
 	logger.Infof(
-		"migration run completed: total=%d applied=%d skipped=%d table=%s",
+		"migration run completed: mode=%s total=%d applied=%d skipped=%d table=%s",
+		mode,
 		len(migrations),
 		appliedCount,
 		skippedCount,
@@ -183,38 +219,97 @@ func (r *Runner) loadExecutedSequences() (map[int64]struct{}, error) {
 	return sequences, nil
 }
 
+// upsertMigrationRecordSQL returns dialect-specific INSERT ... ON CONFLICT / ON DUPLICATE KEY for history upsert.
+func (r *Runner) upsertMigrationRecordSQL() string {
+	t := r.quotedTableName()
+	p1, p2, p3, p4 := r.placeholder(1), r.placeholder(2), r.placeholder(3), r.placeholder(4)
+	switch r.driver {
+	case "mysql", "mariadb":
+		return fmt.Sprintf(
+			`INSERT INTO %s(sequence, version_tag, name, checksum) VALUES (%s,%s,%s,%s) ON DUPLICATE KEY UPDATE version_tag=VALUES(version_tag), name=VALUES(name), checksum=VALUES(checksum), executed_at=CURRENT_TIMESTAMP`,
+			t, p1, p2, p3, p4,
+		)
+	case "postgres":
+		return fmt.Sprintf(
+			`INSERT INTO %s(sequence, version_tag, name, checksum) VALUES (%s,%s,%s,%s) ON CONFLICT (sequence) DO UPDATE SET version_tag=EXCLUDED.version_tag, name=EXCLUDED.name, checksum=EXCLUDED.checksum, executed_at=NOW()`,
+			t, p1, p2, p3, p4,
+		)
+	case "sqlite3":
+		return fmt.Sprintf(
+			`INSERT INTO %s(sequence, version_tag, name, checksum) VALUES (%s,%s,%s,%s) ON CONFLICT(sequence) DO UPDATE SET version_tag=excluded.version_tag, name=excluded.name, checksum=excluded.checksum, executed_at=CURRENT_TIMESTAMP`,
+			t, p1, p2, p3, p4,
+		)
+	default:
+		return ""
+	}
+}
+
 // applyMigration executes one migration and records it atomically in a transaction.
-func (r *Runner) applyMigration(migration Migration) error {
+// rowsKnown is false when the driver does not report RowsAffected for this execution.
+func (r *Runner) applyMigration(migration Migration, mode RunMode) (rowsAffected int64, rowsKnown bool, elapsed time.Duration, err error) {
+	start := time.Now()
+
 	tx, err := r.db.Begin()
 	if err != nil {
-		return fmt.Errorf("begin migration transaction: %w", err)
+		return 0, false, time.Since(start), fmt.Errorf("begin migration transaction: %w", err)
 	}
 
-	if _, err := tx.Exec(migration.SQL); err != nil {
+	logger.Debugf("[%s] migration SQL:\n%s", migration.Name, migration.SQL)
+
+	result, err := tx.Exec(migration.SQL)
+	if err != nil {
 		_ = tx.Rollback()
-		return fmt.Errorf("execute migration SQL: %w", err)
+		return 0, false, time.Since(start), fmt.Errorf("execute migration SQL: %w", err)
 	}
 
-	insertSQL := fmt.Sprintf(
-		`INSERT INTO %s(sequence, version_tag, name, checksum) VALUES (%s, %s, %s, %s)`,
-		r.quotedTableName(),
-		r.placeholder(1),
-		r.placeholder(2),
-		r.placeholder(3),
-		r.placeholder(4),
-	)
-	if _, err := tx.Exec(insertSQL, migration.Sequence, migration.VersionTag, migration.Name, migration.Checksum); err != nil {
-		_ = tx.Rollback()
-		if isUniqueViolation(err) {
-			return nil
+	if ra, raErr := result.RowsAffected(); raErr == nil {
+		rowsAffected = ra
+		rowsKnown = true
+	}
+
+	var execDebug strings.Builder
+	if rowsKnown {
+		fmt.Fprintf(&execDebug, "rows_affected=%d", rowsAffected)
+	} else {
+		execDebug.WriteString("rows_affected=<unsupported>")
+	}
+	if lid, lidErr := result.LastInsertId(); lidErr == nil {
+		fmt.Fprintf(&execDebug, ", last_insert_id=%d", lid)
+	}
+	logger.Debugf("[%s] migration SQL exec output: %s", migration.Name, execDebug.String())
+
+	if mode == RunModeAll {
+		q := r.upsertMigrationRecordSQL()
+		if q == "" {
+			_ = tx.Rollback()
+			return 0, false, time.Since(start), fmt.Errorf("record migration: unsupported driver %q for mode=all", r.driver)
 		}
-		return fmt.Errorf("record migration: %w", err)
+		if _, err := tx.Exec(q, migration.Sequence, migration.VersionTag, migration.Name, migration.Checksum); err != nil {
+			_ = tx.Rollback()
+			return 0, false, time.Since(start), fmt.Errorf("record migration: %w", err)
+		}
+	} else {
+		insertSQL := fmt.Sprintf(
+			`INSERT INTO %s(sequence, version_tag, name, checksum) VALUES (%s, %s, %s, %s)`,
+			r.quotedTableName(),
+			r.placeholder(1),
+			r.placeholder(2),
+			r.placeholder(3),
+			r.placeholder(4),
+		)
+		if _, err := tx.Exec(insertSQL, migration.Sequence, migration.VersionTag, migration.Name, migration.Checksum); err != nil {
+			_ = tx.Rollback()
+			if isUniqueViolation(err) {
+				return 0, false, time.Since(start), nil
+			}
+			return 0, false, time.Since(start), fmt.Errorf("record migration: %w", err)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit migration transaction: %w", err)
+		return 0, false, time.Since(start), fmt.Errorf("commit migration transaction: %w", err)
 	}
-	return nil
+	return rowsAffected, rowsKnown, time.Since(start), nil
 }
 
 // placeholder returns SQL placeholder syntax for the active database driver.

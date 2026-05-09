@@ -60,10 +60,18 @@ func main() {
 				EnvVars: []string{"DB_NAME"},
 			},
 			&cli.StringFlag{
-				Name:    "migrations-dir",
+				Name:    "mode",
 				Aliases: []string{"m"},
+				Usage:   "run mode: diff (skip applied sequences, default) | all (re-run all SQL and upsert history)",
+				Value:   string(migrate.RunModeDiff),
+				EnvVars: []string{"MIGRATE_MODE"},
+			},
+			&cli.StringFlag{
+				Name:    "migrations-dir",
+				Aliases: []string{"r"},
 				Usage:   "migrations directory path",
 				Value:   migrate.DefaultMigrationsDir,
+				EnvVars: []string{"MIGRATE_DIR"},
 			},
 			&cli.StringFlag{
 				Name:    "migrations-table",
@@ -89,6 +97,12 @@ func main() {
 			return err
 		}
 
+		mode, err := migrate.ParseRunMode(ctx.String("mode"))
+		if err != nil {
+			fmt.Fprint(os.Stderr, usageText)
+			return err
+		}
+
 		db, normalizedDriver, err := migrate.MustConnect(cfg)
 		if err != nil {
 			return err
@@ -97,7 +111,7 @@ func main() {
 
 		// Execute migrations from the configured directory into the configured history table.
 		runner := migrate.NewRunner(db, normalizedDriver, ctx.String("migrations-table"))
-		if err := runner.Run(ctx.String("migrations-dir")); err != nil {
+		if err := runner.Run(ctx.String("migrations-dir"), mode); err != nil {
 			return err
 		}
 
@@ -109,13 +123,16 @@ func main() {
 }
 
 const usageText = `Usage:
-  migrate -D <driver> -h <host> -P <port> -u <user> -p <password> -d <database> [-m <migrations_dir>] [-t <migrations_table>]
+  migrate -D <driver> -h <host> -P <port> -u <user> -p <password> -d <database> [options]
+
+Options:
+  -m, --mode diff|all   run mode (default: diff); all re-applies every file and upserts history
+  -r, --migrations-dir  migrations directory (default: ./migrations)
+  -t, --migrations-table migrations history table (default: migrations)
 
 Environment variables (override command-line flags):
   DB_DRIVER, DB_HOST, DB_PORT, DB_USER, DB_PASS, DB_NAME
-
-Migration directory:
-  default: ./migrations (override with -m)
+  MIGRATE_MODE, MIGRATE_DIR
 
 Migrations table:
   default: migrations (override with -t)

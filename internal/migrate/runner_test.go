@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/go-zoox/logger"
 	_ "modernc.org/sqlite"
 )
 
@@ -31,11 +32,11 @@ WHERE NOT EXISTS (SELECT 1 FROM users WHERE name = 'alice');
 `)
 
 	r := NewRunner(db, "sqlite3", DefaultMigrationsTableName)
-	if err := r.Run(dir); err != nil {
+	if err := r.Run(dir, RunModeDiff); err != nil {
 		t.Fatalf("first run failed: %v", err)
 	}
 
-	if err := r.Run(dir); err != nil {
+	if err := r.Run(dir, RunModeDiff); err != nil {
 		t.Fatalf("second run failed: %v", err)
 	}
 
@@ -74,7 +75,7 @@ CREATE TABLE IF NOT EXISTS users (
 
 	customTable := "schema_migrations"
 	r := NewRunner(db, "sqlite3", customTable)
-	if err := r.Run(dir); err != nil {
+	if err := r.Run(dir, RunModeDiff); err != nil {
 		t.Fatalf("run with custom table failed: %v", err)
 	}
 
@@ -130,10 +131,10 @@ WHERE email = 'alice@example.com'
 `)
 
 	r := NewRunner(db, "sqlite3", DefaultMigrationsTableName)
-	if err := r.Run(dir); err != nil {
+	if err := r.Run(dir, RunModeDiff); err != nil {
 		t.Fatalf("first run failed: %v", err)
 	}
-	if err := r.Run(dir); err != nil {
+	if err := r.Run(dir, RunModeDiff); err != nil {
 		t.Fatalf("second run failed: %v", err)
 	}
 
@@ -187,7 +188,7 @@ INSERT INTO migration_order (step) VALUES (2);
 `)
 
 	r := NewRunner(db, "sqlite3", DefaultMigrationsTableName)
-	if err := r.Run(dir); err != nil {
+	if err := r.Run(dir, RunModeDiff); err != nil {
 		t.Fatalf("run ordered migration failed: %v", err)
 	}
 
@@ -220,6 +221,99 @@ INSERT INTO migration_order (step) VALUES (2);
 	}
 }
 
+func TestApplyMigration_SqliteReportsRowsAffectedForInsert(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "apply_insert.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	r := NewRunner(db, "sqlite3", DefaultMigrationsTableName)
+	if err := r.ensureMigrationsTable(); err != nil {
+		t.Fatalf("ensure migrations table: %v", err)
+	}
+
+	sqlBody := `CREATE TABLE IF NOT EXISTS items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  label TEXT NOT NULL
+);
+INSERT INTO items (label) VALUES ('a'), ('b');`
+	m := Migration{
+		Sequence:   1,
+		VersionTag: "v2026.05.06",
+		Name:       "1_items_seed.v2026.05.06.sql",
+		SQL:        sqlBody,
+		Checksum:   checksum([]byte(sqlBody)),
+	}
+
+	rowsAffected, rowsKnown, elapsed, err := r.applyMigration(m, RunModeDiff)
+	if err != nil {
+		t.Fatalf("applyMigration: %v", err)
+	}
+	if !rowsKnown {
+		t.Fatal("expected RowsAffected to be supported for sqlite migration Exec")
+	}
+	if rowsAffected < 1 {
+		t.Fatalf("expected at least one changed row from INSERT, got %d", rowsAffected)
+	}
+	if elapsed < 0 {
+		t.Fatalf("elapsed must be non-negative, got %v", elapsed)
+	}
+
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM "migrations"`).Scan(&n); err != nil {
+		t.Fatalf("count migrations: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 migration row recorded, got %d", n)
+	}
+
+	var itemCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM items`).Scan(&itemCount); err != nil {
+		t.Fatalf("count items: %v", err)
+	}
+	if itemCount != 2 {
+		t.Fatalf("expected 2 inserted rows, got %d", itemCount)
+	}
+}
+
+func TestApplyMigration_FailedExecDoesNotRecordMigrationRow(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "apply_fail.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	r := NewRunner(db, "sqlite3", DefaultMigrationsTableName)
+	if err := r.ensureMigrationsTable(); err != nil {
+		t.Fatalf("ensure migrations table: %v", err)
+	}
+
+	sqlBody := `THIS IS NOT VALID SQL;`
+	m := Migration{
+		Sequence:   1,
+		VersionTag: "v2026.05.06",
+		Name:       "1_bad_syntax.v2026.05.06.sql",
+		SQL:        sqlBody,
+		Checksum:   checksum([]byte(sqlBody)),
+	}
+
+	_, _, _, err = r.applyMigration(m, RunModeDiff)
+	if err == nil {
+		t.Fatal("expected applyMigration to fail on invalid SQL")
+	}
+
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM "migrations"`).Scan(&n); err != nil {
+		t.Fatalf("count migrations: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("expected no migration row after failed exec, got %d", n)
+	}
+}
+
 func TestRun_StopsOnFailureAndDoesNotRecordBrokenMigration(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "failure_case.db")
 	db, err := sql.Open("sqlite", dbPath)
@@ -245,7 +339,7 @@ WHERE NOT EXISTS (SELECT 1 FROM users WHERE name = 'bob');
 `)
 
 	r := NewRunner(db, "sqlite3", DefaultMigrationsTableName)
-	if err := r.Run(dir); err == nil {
+	if err := r.Run(dir, RunModeDiff); err == nil {
 		t.Fatal("expected migration run to fail on broken SQL")
 	}
 
@@ -263,6 +357,166 @@ WHERE NOT EXISTS (SELECT 1 FROM users WHERE name = 'bob');
 	}
 	if bobCount != 0 {
 		t.Fatalf("expected third migration to be skipped after failure, got bob count %d", bobCount)
+	}
+}
+
+func TestRun_WithDebugLogLevel_CompletesSuccessfully(t *testing.T) {
+	prevLevel := logger.GetLevel()
+	if err := logger.SetLevel("debug"); err != nil {
+		t.Fatalf("set debug level: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = logger.SetLevel(prevLevel)
+	})
+
+	dbPath := filepath.Join(t.TempDir(), "debug_level.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	dir := t.TempDir()
+	writeSQL(t, filepath.Join(dir, "1_user_create_table.v2026.05.06.sql"), `
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL
+);
+`)
+
+	r := NewRunner(db, "sqlite3", DefaultMigrationsTableName)
+	if err := r.Run(dir, RunModeDiff); err != nil {
+		t.Fatalf("run at debug level: %v", err)
+	}
+}
+
+func TestRun_ModeAll_UpsertsHistoryAfterFileChanged(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "mode_all.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "1_kv_seed.v2026.05.06.sql")
+	sqlV1 := `CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY);
+INSERT OR IGNORE INTO kv(k) VALUES ('a');
+`
+	writeSQL(t, path, sqlV1)
+
+	r := NewRunner(db, "sqlite3", DefaultMigrationsTableName)
+	if err := r.Run(dir, RunModeDiff); err != nil {
+		t.Fatalf("first diff run: %v", err)
+	}
+
+	wantChecksum1 := checksum([]byte(sqlV1))
+	var gotChecksum string
+	if err := db.QueryRow(`SELECT checksum FROM "migrations" WHERE sequence = 1`).Scan(&gotChecksum); err != nil {
+		t.Fatalf("read checksum after diff: %v", err)
+	}
+	if gotChecksum != wantChecksum1 {
+		t.Fatalf("checksum after diff: got %s want %s", gotChecksum, wantChecksum1)
+	}
+
+	sqlV2 := `CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY);
+INSERT OR IGNORE INTO kv(k) VALUES ('b');
+`
+	writeSQL(t, path, sqlV2)
+
+	if err := r.Run(dir, RunModeDiff); err != nil {
+		t.Fatalf("second diff run: %v", err)
+	}
+	if err := db.QueryRow(`SELECT checksum FROM "migrations" WHERE sequence = 1`).Scan(&gotChecksum); err != nil {
+		t.Fatalf("read checksum after second diff: %v", err)
+	}
+	if gotChecksum != wantChecksum1 {
+		t.Fatalf("diff mode must not refresh checksum when skipped: got %s want %s", gotChecksum, wantChecksum1)
+	}
+
+	if err := r.Run(dir, RunModeAll); err != nil {
+		t.Fatalf("all mode run: %v", err)
+	}
+	wantChecksum2 := checksum([]byte(sqlV2))
+	if err := db.QueryRow(`SELECT checksum FROM "migrations" WHERE sequence = 1`).Scan(&gotChecksum); err != nil {
+		t.Fatalf("read checksum after all: %v", err)
+	}
+	if gotChecksum != wantChecksum2 {
+		t.Fatalf("all mode should upsert checksum: got %s want %s", gotChecksum, wantChecksum2)
+	}
+
+	var keyCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM kv`).Scan(&keyCount); err != nil {
+		t.Fatalf("count kv: %v", err)
+	}
+	if keyCount != 2 {
+		t.Fatalf("expected rows a and b in kv, got count %d", keyCount)
+	}
+}
+
+func TestApplyMigration_ModeAll_UpsertsExistingHistoryRow(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "apply_all.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	r := NewRunner(db, "sqlite3", DefaultMigrationsTableName)
+	if err := r.ensureMigrationsTable(); err != nil {
+		t.Fatalf("ensure migrations table: %v", err)
+	}
+
+	sql1 := `CREATE TABLE IF NOT EXISTS t (x INTEGER NOT NULL);`
+	m1 := Migration{
+		Sequence:   1,
+		VersionTag: "v2026.05.06",
+		Name:       "1_create.v2026.05.06.sql",
+		SQL:        sql1,
+		Checksum:   checksum([]byte(sql1)),
+	}
+	if _, _, _, err := r.applyMigration(m1, RunModeDiff); err != nil {
+		t.Fatalf("first applyMigration: %v", err)
+	}
+
+	sql2 := `INSERT INTO t VALUES (7);`
+	m2 := Migration{
+		Sequence:   1,
+		VersionTag: "v2026.05.07",
+		Name:       "1_create.v2026.05.07.sql",
+		SQL:        sql2,
+		Checksum:   checksum([]byte(sql2)),
+	}
+	if _, _, _, err := r.applyMigration(m2, RunModeAll); err != nil {
+		t.Fatalf("applyMigration all: %v", err)
+	}
+
+	var gotName, gotChecksum, gotVer string
+	err = db.QueryRow(`SELECT name, checksum, version_tag FROM "migrations" WHERE sequence = 1`).Scan(&gotName, &gotChecksum, &gotVer)
+	if err != nil {
+		t.Fatalf("query migrations row: %v", err)
+	}
+	if gotName != m2.Name || gotChecksum != m2.Checksum || gotVer != m2.VersionTag {
+		t.Fatalf("upserted row got name=%q checksum=%q ver=%q; want %q %q %q", gotName, gotChecksum, gotVer, m2.Name, m2.Checksum, m2.VersionTag)
+	}
+
+	var x int
+	if err := db.QueryRow(`SELECT x FROM t WHERE x = 7`).Scan(&x); err != nil {
+		t.Fatalf("expected inserted row: %v", err)
+	}
+}
+
+func TestEnsureMigrationsTable_InvalidTableNameRejected(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "invalid_table.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	r := NewRunner(db, "sqlite3", `bad-name`)
+	if err := r.ensureMigrationsTable(); err == nil {
+		t.Fatal("expected error for invalid migrations table name")
 	}
 }
 
