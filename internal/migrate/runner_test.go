@@ -314,6 +314,118 @@ func TestApplyMigration_FailedExecDoesNotRecordMigrationRow(t *testing.T) {
 	}
 }
 
+func TestDryRun_SqliteRollsBackAllChangesThenRealRunPersists(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "dryrun_then_run.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	dir := t.TempDir()
+	writeSQL(t, filepath.Join(dir, "1_user_create_table.v2026.05.06.sql"), `
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL
+);
+`)
+	writeSQL(t, filepath.Join(dir, "2_user_seed_data.v2026.05.06.sql"), `
+INSERT INTO users (name)
+SELECT 'dryrun_alice'
+WHERE NOT EXISTS (SELECT 1 FROM users WHERE name = 'dryrun_alice');
+`)
+
+	r := NewRunner(db, "sqlite3", DefaultMigrationsTableName)
+	if err := r.DryRun(dir, RunModeDiff); err != nil {
+		t.Fatalf("dry-run: %v", err)
+	}
+
+	var tableCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='users'`).Scan(&tableCount); err != nil {
+		t.Fatalf("sqlite_master users: %v", err)
+	}
+	if tableCount != 0 {
+		t.Fatalf("after dry-run expected no users table, got count=%d", tableCount)
+	}
+
+	if err := r.Run(dir, RunModeDiff); err != nil {
+		t.Fatalf("real run: %v", err)
+	}
+
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='users'`).Scan(&tableCount); err != nil {
+		t.Fatalf("sqlite_master users after run: %v", err)
+	}
+	if tableCount != 1 {
+		t.Fatalf("expected users table after real run, got count=%d", tableCount)
+	}
+
+	var nUsers int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM users WHERE name = 'dryrun_alice'`).Scan(&nUsers); err != nil {
+		t.Fatalf("count alice: %v", err)
+	}
+	if nUsers != 1 {
+		t.Fatalf("expected 1 row after real run, got %d", nUsers)
+	}
+
+	var rec int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM "migrations"`).Scan(&rec); err != nil {
+		t.Fatalf("count migrations: %v", err)
+	}
+	if rec != 2 {
+		t.Fatalf("expected 2 migration records, got %d", rec)
+	}
+}
+
+func TestDryRun_SqliteStopsOnFailureAndLeavesNoCommittedState(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "dryrun_fail.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	dir := t.TempDir()
+	writeSQL(t, filepath.Join(dir, "1_ok.v2026.05.06.sql"), `
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL
+);
+`)
+	writeSQL(t, filepath.Join(dir, "2_bad.v2026.05.06.sql"), `
+INSERT INTO users (oops) VALUES (1);
+`)
+
+	r := NewRunner(db, "sqlite3", DefaultMigrationsTableName)
+	if err := r.DryRun(dir, RunModeDiff); err == nil {
+		t.Fatal("expected dry-run to fail on bad SQL")
+	}
+
+	var tableCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='users'`).Scan(&tableCount); err != nil {
+		t.Fatalf("sqlite_master: %v", err)
+	}
+	if tableCount != 0 {
+		t.Fatalf("after failed dry-run expected no users table, got %d", tableCount)
+	}
+}
+
+func TestDryRun_MysqlNotSupported(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "dryrun_mysql_driver.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	dir := t.TempDir()
+	writeSQL(t, filepath.Join(dir, "1_x.v2026.05.06.sql"), `SELECT 1;`)
+
+	r := NewRunner(db, "mysql", DefaultMigrationsTableName)
+	if err := r.DryRun(dir, RunModeDiff); err == nil {
+		t.Fatal("expected dry-run to reject mysql driver")
+	}
+}
+
 func TestRun_StopsOnFailureAndDoesNotRecordBrokenMigration(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "failure_case.db")
 	db, err := sql.Open("sqlite", dbPath)

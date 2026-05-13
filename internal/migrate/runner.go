@@ -32,6 +32,141 @@ func NewRunner(db *sql.DB, driver string, tableName string) *Runner {
 	}
 }
 
+type sqlExecutor interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+type sqlQuerier interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
+// DryRun validates pending migrations against the current database without persisting changes.
+// It runs inside a single transaction and rolls back at the end, so migration SQL and the
+// history table are not committed. Not supported for MySQL/MariaDB because DDL there often
+// triggers implicit commits, so a rollback cannot reliably undo changes.
+func (r *Runner) DryRun(dir string, mode RunMode) error {
+	switch r.driver {
+	case "mysql", "mariadb":
+		return fmt.Errorf(
+			"dry-run is not supported for driver %q: MySQL/MariaDB DDL usually commits implicitly, so changes cannot be rolled back; use PostgreSQL or SQLite3 for transactional dry-run, or validate against a database copy",
+			r.driver,
+		)
+	}
+
+	logger.Infof("starting migration dry-run: mode=%s dir=%s table=%s driver=%s", mode, dir, r.tableName, r.driver)
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin dry-run transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	logger.Infof("ensure migrations table exists (inside dry-run transaction)")
+	if err := r.ensureMigrationsTableExec(tx); err != nil {
+		return err
+	}
+
+	logger.Infof("load migration files")
+	migrations, err := LoadMigrations(dir)
+	if err != nil {
+		return err
+	}
+
+	logger.Infof("load executed migration sequences")
+	executedSequences, err := r.loadExecutedSequencesQuery(tx)
+	if err != nil {
+		return err
+	}
+
+	logger.Infof("validate pending migrations one by one")
+	appliedCount := 0
+	skippedCount := 0
+	total := len(migrations)
+	for idx, migration := range migrations {
+		current := idx + 1
+
+		if mode == RunModeDiff {
+			if _, done := executedSequences[migration.Sequence]; done {
+				logger.Infof(
+					"[%d/%d] Ignored %s (already executed)",
+					current,
+					total,
+					migration.Name,
+				)
+				skippedCount++
+				continue
+			}
+		}
+
+		if mode == RunModeAll {
+			if _, done := executedSequences[migration.Sequence]; done {
+				logger.Infof(
+					"[%d/%d] reapplying %s (mode=all, dry-run) ...",
+					current,
+					total,
+					migration.Name,
+				)
+			} else {
+				logger.Infof(
+					"[%d/%d] applying %s (dry-run) ...",
+					current,
+					total,
+					migration.Name,
+				)
+			}
+		} else {
+			logger.Infof(
+				"[%d/%d] applying %s (dry-run) ...",
+				current,
+				total,
+				migration.Name,
+			)
+		}
+
+		rowsAffected, rowsKnown, elapsed, err := r.applyMigrationDryTx(tx, migration)
+		if err != nil {
+			logger.Errorf(
+				"[%d/%d] dry-run failed for %s: %v",
+				current,
+				total,
+				migration.Name,
+				err,
+			)
+			return err
+		}
+
+		if rowsKnown {
+			logger.Infof(
+				"[%d/%d] validated %s (rows_affected=%d, elapsed=%s)",
+				current,
+				total,
+				migration.Name,
+				rowsAffected,
+				elapsed.String(),
+			)
+		} else {
+			logger.Infof(
+				"[%d/%d] validated %s (elapsed=%s)",
+				current,
+				total,
+				migration.Name,
+				elapsed.String(),
+			)
+		}
+		appliedCount++
+	}
+
+	logger.Infof(
+		"migration dry-run completed: mode=%s total=%d validated=%d skipped=%d table=%s (transaction rolled back; nothing persisted)",
+		mode,
+		len(migrations),
+		appliedCount,
+		skippedCount,
+		r.tableName,
+	)
+	return nil
+}
+
 // Run applies migrations in ascending sequence order according to mode.
 func (r *Runner) Run(dir string, mode RunMode) error {
 	logger.Infof("starting migration run: mode=%s dir=%s table=%s driver=%s", mode, dir, r.tableName, r.driver)
@@ -53,7 +188,6 @@ func (r *Runner) Run(dir string, mode RunMode) error {
 		return err
 	}
 
-	logger.Infof("apply pending migrations one by one")
 	appliedCount := 0
 	skippedCount := 0
 	total := len(migrations)
@@ -144,16 +278,37 @@ func (r *Runner) Run(dir string, mode RunMode) error {
 
 // ensureMigrationsTable creates the migration history table if it does not exist.
 func (r *Runner) ensureMigrationsTable() error {
+	ddl, err := r.migrationsTableDDL()
+	if err != nil {
+		return err
+	}
+	if _, err := r.db.Exec(ddl); err != nil {
+		return fmt.Errorf("create migrations table: %w", err)
+	}
+	return nil
+}
+
+func (r *Runner) ensureMigrationsTableExec(ex sqlExecutor) error {
+	ddl, err := r.migrationsTableDDL()
+	if err != nil {
+		return err
+	}
+	if _, err := ex.Exec(ddl); err != nil {
+		return fmt.Errorf("create migrations table: %w", err)
+	}
+	return nil
+}
+
+func (r *Runner) migrationsTableDDL() (string, error) {
 	if !tableNamePattern.MatchString(r.tableName) {
-		return fmt.Errorf("invalid migrations table name %q, allowed pattern: %s", r.tableName, tableNamePattern.String())
+		return "", fmt.Errorf("invalid migrations table name %q, allowed pattern: %s", r.tableName, tableNamePattern.String())
 	}
 
 	tableName := r.quotedTableName()
 
-	var ddl string
 	switch r.driver {
 	case "mysql", "mariadb":
-		ddl = fmt.Sprintf(`
+		return fmt.Sprintf(`
 CREATE TABLE IF NOT EXISTS %s (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   sequence BIGINT NOT NULL,
@@ -163,9 +318,9 @@ CREATE TABLE IF NOT EXISTS %s (
   executed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_migrations_sequence (sequence)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-`, tableName)
+`, tableName), nil
 	case "postgres":
-		ddl = fmt.Sprintf(`
+		return fmt.Sprintf(`
 CREATE TABLE IF NOT EXISTS %s (
   id BIGSERIAL PRIMARY KEY,
   sequence BIGINT NOT NULL,
@@ -175,9 +330,9 @@ CREATE TABLE IF NOT EXISTS %s (
   executed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT uq_migrations_sequence UNIQUE (sequence)
 );
-`, tableName)
+`, tableName), nil
 	case "sqlite3":
-		ddl = fmt.Sprintf(`
+		return fmt.Sprintf(`
 CREATE TABLE IF NOT EXISTS %s (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   sequence INTEGER NOT NULL UNIQUE,
@@ -186,20 +341,19 @@ CREATE TABLE IF NOT EXISTS %s (
   checksum TEXT NOT NULL,
   executed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-`, tableName)
+`, tableName), nil
 	default:
-		return fmt.Errorf("unsupported driver for migrations table: %s", r.driver)
+		return "", fmt.Errorf("unsupported driver for migrations table: %s", r.driver)
 	}
-
-	if _, err := r.db.Exec(ddl); err != nil {
-		return fmt.Errorf("create migrations table: %w", err)
-	}
-	return nil
 }
 
 // loadExecutedSequences fetches already executed migration sequences from the database.
 func (r *Runner) loadExecutedSequences() (map[int64]struct{}, error) {
-	rows, err := r.db.Query(fmt.Sprintf(`SELECT sequence FROM %s`, r.quotedTableName()))
+	return r.loadExecutedSequencesQuery(r.db)
+}
+
+func (r *Runner) loadExecutedSequencesQuery(q sqlQuerier) (map[int64]struct{}, error) {
+	rows, err := q.Query(fmt.Sprintf(`SELECT sequence FROM %s`, r.quotedTableName()))
 	if err != nil {
 		return nil, fmt.Errorf("query executed migrations: %w", err)
 	}
@@ -217,6 +371,36 @@ func (r *Runner) loadExecutedSequences() (map[int64]struct{}, error) {
 		return nil, fmt.Errorf("iterate executed migration sequences: %w", err)
 	}
 	return sequences, nil
+}
+
+// applyMigrationDryTx executes migration SQL on an open transaction only (no history row).
+func (r *Runner) applyMigrationDryTx(tx *sql.Tx, migration Migration) (rowsAffected int64, rowsKnown bool, elapsed time.Duration, err error) {
+	start := time.Now()
+
+	logger.Debugf("[%s] migration SQL (dry-run):\n%s", migration.Name, migration.SQL)
+
+	result, err := tx.Exec(migration.SQL)
+	if err != nil {
+		return 0, false, time.Since(start), fmt.Errorf("execute migration SQL: %w", err)
+	}
+
+	if ra, raErr := result.RowsAffected(); raErr == nil {
+		rowsAffected = ra
+		rowsKnown = true
+	}
+
+	var execDebug strings.Builder
+	if rowsKnown {
+		fmt.Fprintf(&execDebug, "rows_affected=%d", rowsAffected)
+	} else {
+		execDebug.WriteString("rows_affected=<unsupported>")
+	}
+	if lid, lidErr := result.LastInsertId(); lidErr == nil {
+		fmt.Fprintf(&execDebug, ", last_insert_id=%d", lid)
+	}
+	logger.Debugf("[%s] migration SQL exec output (dry-run): %s", migration.Name, execDebug.String())
+
+	return rowsAffected, rowsKnown, time.Since(start), nil
 }
 
 // upsertMigrationRecordSQL returns dialect-specific INSERT ... ON CONFLICT / ON DUPLICATE KEY for history upsert.

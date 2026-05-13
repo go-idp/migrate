@@ -14,6 +14,7 @@ A production-grade Go database migration CLI for MySQL, MariaDB, PostgreSQL, and
 - Logging is powered by `github.com/go-zoox/logger`
 - Cross-platform support: Linux / macOS / Windows
 - Runtime progress logs: `[current/total] applying file (filename) ...`
+- **Dry-run** (`-n`, `--dry-run`): validate pending migrations in one transaction and roll back (PostgreSQL and SQLite3 only; **not** MySQL/MariaDB)
 
 ## Build
 
@@ -35,6 +36,7 @@ Environment variables:
 - `DB_NAME`
 - `MIGRATE_MODE` (`diff` \| `all`, default `diff`)
 - `MIGRATE_DIR` (migrations directory; default `./migrations`)
+- `MIGRATE_DRY_RUN` (enable dry-run when true; same as `-n`)
 
 CLI flags:
 
@@ -47,6 +49,7 @@ CLI flags:
 - `-m`, `--mode` run mode: `diff` (default) or `all`
 - `-r`, `--migrations-dir` migrations directory (default: `./migrations`)
 - `-t`, `--migrations-table` migrations history table (default: `migrations`)
+- `-n`, `--dry-run` validate migrations without persisting (PostgreSQL / SQLite3 only)
 
 ## Usage
 
@@ -70,6 +73,21 @@ DB_USER=postgres \
 DB_PASS=secret \
 DB_NAME=app_db \
 ./migrate -D mysql -h 1.1.1.1 -P 3306 -u root -p root -d ignored_by_env
+```
+
+## Dry-run
+
+Dry-run connects to the **real** database, runs each applicable migration SQL inside a **single transaction**, does **not** write the migrations history table, then **rolls back** the whole transaction. You get the same parse/execution errors as a real run (for supported engines), with no committed schema or history changes.
+
+- **Supported:** `postgres`, `sqlite3`
+- **Not supported:** `mysql`, `mariadb` — DDL often causes implicit commits, so rollback cannot reliably undo changes; use a database copy or validate against PostgreSQL/SQLite if you need this mode.
+
+`diff` and `all` behave like a normal run regarding **which files execute**; only persistence differs.
+
+Example:
+
+```bash
+./migrate -D postgres -h 127.0.0.1 -P 5432 -u postgres -p secret -d app_db --dry-run
 ```
 
 ## Migration File Specification
@@ -100,3 +118,4 @@ Current test coverage includes:
 - SQLite integration: rerun skip logic and custom migration table support
 - Real-world scenarios: DDL + idempotent DML + failure stop and record checks
 - Run modes: `diff` vs `all` (SQLite upsert / checksum refresh)
+- Dry-run: SQLite transactional rollback and MySQL rejection

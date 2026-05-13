@@ -79,6 +79,13 @@ func main() {
 				Usage:   "migrations record table name",
 				Value:   migrate.DefaultMigrationsTableName,
 			},
+			&cli.BoolFlag{
+				Name:    "dry-run",
+				Aliases: []string{"n"},
+				Usage:   "validate migrations in one transaction and roll back (postgres, sqlite3 only; not mysql)",
+				Value:   false,
+				EnvVars: []string{"MIGRATE_DRY_RUN"},
+			},
 		},
 	})
 
@@ -109,8 +116,15 @@ func main() {
 		}
 		defer db.Close()
 
-		// Execute migrations from the configured directory into the configured history table.
 		runner := migrate.NewRunner(db, normalizedDriver, ctx.String("migrations-table"))
+		if ctx.Bool("dry-run") {
+			if err := runner.DryRun(ctx.String("migrations-dir"), mode); err != nil {
+				return err
+			}
+			fmt.Fprintln(os.Stdout, "dry-run completed (no changes persisted)")
+			return nil
+		}
+
 		if err := runner.Run(ctx.String("migrations-dir"), mode); err != nil {
 			return err
 		}
@@ -127,12 +141,13 @@ const usageText = `Usage:
 
 Options:
   -m, --mode diff|all   run mode (default: diff); all re-applies every file and upserts history
+  -n, --dry-run         validate in one transaction and roll back (PostgreSQL/SQLite3; not MySQL)
   -r, --migrations-dir  migrations directory (default: ./migrations)
   -t, --migrations-table migrations history table (default: migrations)
 
 Environment variables (override command-line flags):
   DB_DRIVER, DB_HOST, DB_PORT, DB_USER, DB_PASS, DB_NAME
-  MIGRATE_MODE, MIGRATE_DIR
+  MIGRATE_MODE, MIGRATE_DIR, MIGRATE_DRY_RUN
 
 Migrations table:
   default: migrations (override with -t)
