@@ -314,7 +314,7 @@ CREATE TABLE IF NOT EXISTS %s (
   sequence BIGINT NOT NULL,
   version_tag VARCHAR(64) NOT NULL,
   name VARCHAR(255) NOT NULL,
-  checksum CHAR(64) NOT NULL,
+  checksum CHAR(32) NOT NULL,
   executed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_migrations_sequence (sequence)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -326,7 +326,7 @@ CREATE TABLE IF NOT EXISTS %s (
   sequence BIGINT NOT NULL,
   version_tag VARCHAR(64) NOT NULL,
   name VARCHAR(255) NOT NULL,
-  checksum CHAR(64) NOT NULL,
+  checksum CHAR(32) NOT NULL,
   executed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT uq_migrations_sequence UNIQUE (sequence)
 );

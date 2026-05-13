@@ -1,7 +1,7 @@
 package migrate
 
 import (
-	"crypto/sha256"
+	"crypto/md5"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -79,6 +79,6 @@ func LoadMigrations(dir string) ([]Migration, error) {
 }
 
 func checksum(data []byte) string {
-	sum := sha256.Sum256(data)
+	sum := md5.Sum(data)
 	return hex.EncodeToString(sum[:])
 }

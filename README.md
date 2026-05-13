@@ -102,6 +102,7 @@ Example:
 ## Migration History Table
 
 - Default table name: `migrations` (overridable with `-t`)
+- `checksum` is the lowercase hex MD5 of the migration file bytes (same format as `md5 -q` on macOS or `md5sum` on Linux)
 - Built-in unique constraint ensures one execution per sequence
 - In **diff** mode, recorded sequences are skipped; **all** mode upserts an existing row for that sequence after re-running its SQL
 
