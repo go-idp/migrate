@@ -100,13 +100,11 @@ func main() {
 			Name:   ctx.String("database"),
 		}
 		if err := cfg.Validate(); err != nil {
-			fmt.Fprint(os.Stderr, usageText)
 			return err
 		}
 
 		mode, err := migrate.ParseRunMode(ctx.String("mode"))
 		if err != nil {
-			fmt.Fprint(os.Stderr, usageText)
 			return err
 		}
 
@@ -135,20 +133,3 @@ func main() {
 
 	app.Run()
 }
-
-const usageText = `Usage:
-  migrate -D <driver> -h <host> -P <port> -u <user> -p <password> -d <database> [options]
-
-Options:
-  -m, --mode diff|all   run mode (default: diff); all re-applies every file and upserts history
-  -n, --dry-run         validate in one transaction and roll back (PostgreSQL/SQLite3; not MySQL)
-  -r, --migrations-dir  migrations directory (default: ./migrations)
-  -t, --migrations-table migrations history table (default: migrations)
-
-Environment variables (override command-line flags):
-  DB_DRIVER, DB_HOST, DB_PORT, DB_USER, DB_PASS, DB_NAME
-  MIGRATE_MODE, MIGRATE_DIR, MIGRATE_DRY_RUN
-
-Migrations table:
-  default: migrations (override with -t)
-`
