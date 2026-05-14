@@ -1,110 +1,164 @@
-# migrate
+# sql-migration
 
 A production-grade Go database migration CLI for MySQL, MariaDB, PostgreSQL, and SQLite3.
+
+Go module: `github.com/go-idp/sql-migration`
 
 ## Features
 
 - Supported drivers: `mysql`, `mariadb`, `postgres`, `sqlite3`
 - Migration state is stored in a database table (default: `migrations`)
-- Automatically creates the migration history table on startup
-- **diff** mode (default): already-recorded sequences are skipped
-- **all** mode: every migration SQL runs again; existing history rows are upserted (`checksum`, `name`, `version_tag`, `executed_at`)
+- Automatically creates the migration history table when needed
+- **`migrate`**: apply SQL from files; **diff** mode (default) skips already-recorded sequences; **all** mode re-runs every file and upserts history (`checksum`, `name`, `version_tag`, `executed_at`)
+- **`validate`**: check migration files on disk; with a database connection, verify that applied history matches current file checksums
+- **`status`**: tabular report of `pending`, `applied`, `drift` (checksum mismatch), and `orphan` (history without a matching file) migrations
+- **`commit <sql-file-path>`**: record one migration in history **without executing** its SQL (manual apply / restore alignment)
 - Migration files are sorted and executed by sequence in ascending order
 - Supports both DDL and DML migrations (idempotent DML is recommended)
-- Logging is powered by `github.com/go-zoox/logger`
-- Cross-platform support: Linux / macOS / Windows
-- Runtime progress logs: `[current/total] applying file (filename) ...`
-- **Dry-run** (`-n`, `--dry-run`): validate pending migrations in one transaction and roll back (PostgreSQL and SQLite3 only; **not** MySQL/MariaDB)
+- Logging uses `github.com/go-zoox/logger`
+- Cross-platform: Linux / macOS / Windows
+- Progress logs: `[current/total] applying …`
+- **Dry-run** (`migrate` only: `-n`, `--dry-run`): run pending migrations in one transaction and roll back (**PostgreSQL** and **SQLite3** only; not MySQL/MariaDB)
 
 ## Build
 
 ```bash
-go build -o migrate ./cmd/migrate
+go build -o sql-migration ./cmd/sql-migration
 ```
 
-## Configuration Priority
-
-Environment variables have higher priority than CLI flags.
-
-Environment variables:
-
-- `DB_DRIVER`
-- `DB_HOST`
-- `DB_PORT`
-- `DB_USER`
-- `DB_PASS`
-- `DB_NAME`
-- `MIGRATE_MODE` (`diff` \| `all`, default `diff`)
-- `MIGRATE_DIR` (migrations directory; default `./migrations`)
-- `MIGRATE_DRY_RUN` (enable dry-run when true; same as `-n`)
-
-CLI flags:
-
-- `-D` driver
-- `-h` host
-- `-P` port
-- `-u` username
-- `-p` password
-- `-d` database name (required)
-- `-m`, `--mode` run mode: `diff` (default) or `all`
-- `-r`, `--migrations-dir` migrations directory (default: `./migrations`)
-- `-t`, `--migrations-table` migrations history table (default: `migrations`)
-- `-n`, `--dry-run` validate migrations without persisting (PostgreSQL / SQLite3 only)
-
-## Usage
+Install with Go 1.25+:
 
 ```bash
-migrate -D <driver> -h <host> -P <port> -u <user> -p <password> -d <database> [options]
+go install github.com/go-idp/sql-migration/cmd/sql-migration@latest
 ```
 
-Example (CLI only):
+## CLI overview
+
+```text
+sql-migration [global options] <command> [command options] [arguments]
+```
+
+| Command | Purpose |
+|--------|---------|
+| `migrate` | Apply migrations from a directory |
+| `validate` | Validate files; optionally validate against DB history |
+| `status` | Show migration line status vs database |
+| `commit` | Upsert history for one SQL file (no SQL execution) |
+
+Global options: `--help`, `-h`, `--version`, `-v`.
+
+## Configuration priority
+
+Each option can be set via CLI flag and/or `EnvVars` on that flag. With **urfave/cli** (used under the hood), environment variables supply defaults when a flag is omitted; an explicit flag on the command line wins for that run.
+
+### Environment variables
+
+| Variable | Used by | Meaning Default |
+|----------|---------|-----------------|
+| `DB_DRIVER` | `migrate`, `validate` (not offline), `status`, `commit` | Driver name |
+| `DB_HOST` | same | Host |
+| `DB_PORT` | same | Port |
+| `DB_USER` | same | User |
+| `DB_PASS` | same | Password |
+| `DB_NAME` | same | Database name (SQLite3: often the file path) |
+| `MIGRATE_DIR` | `migrate`, `validate`, `status` | Migrations directory (`./migrations`) |
+| `MIGRATE_MODE` | `migrate` only | `diff` or `all` (`diff`) |
+| `MIGRATE_DRY_RUN` | `migrate` only | `true` enables dry-run (`-n`) |
+
+### Common flags (connection)
+
+- `-D`, `--driver` — `mysql` \| `mariadb` \| `postgres` \| `sqlite3`
+- `--host`, `-P` / `--port`, `-u` / `--user`, `-p` / `--pass`, `-d` / `--database`
+- `-r`, `--migrations-dir` — default `./migrations` (not used by `commit`)
+- `-t`, `--migrations-table` — default `migrations`
+
+## Command: `migrate`
+
+Apply migrations from `--migrations-dir` (`-r`).
 
 ```bash
-./migrate -D mysql -h 127.0.0.1 -P 3306 -u root -p secret -d app_db
+sql-migration migrate -D postgres -h 127.0.0.1 -P 5432 -u postgres -p secret -d app_db \
+  -r ./migrations -m diff
 ```
 
-Example (environment variables override CLI flags):
+Options:
+
+- `-m`, `--mode` — `diff` (default) or `all`
+- `-n`, `--dry-run` — transactional validation only (PostgreSQL / SQLite3; see **Dry-run** below)
+
+## Command: `validate`
+
+- **With database** (default): ensures the history table exists, loads files from `-r`, and checks that every **recorded** sequence has a matching file and **identical MD5 checksum** to the database.
+- **Offline** (`-o`, `--offline`): only validates the migrations directory (naming, duplicates, readability). No DB connection required.
 
 ```bash
-DB_DRIVER=postgres \
-DB_HOST=127.0.0.1 \
-DB_PORT=5432 \
-DB_USER=postgres \
-DB_PASS=secret \
-DB_NAME=app_db \
-./migrate -D mysql -h 1.1.1.1 -P 3306 -u root -p root -d ignored_by_env
+sql-migration validate --offline -r ./migrations
+
+sql-migration validate -D postgres -h 127.0.0.1 -P 5432 -u postgres -p secret -d app_db -r ./migrations
 ```
 
-## Dry-run
+## Command: `status`
 
-Dry-run connects to the **real** database, runs each applicable migration SQL inside a **single transaction**, does **not** write the migrations history table, then **rolls back** the whole transaction. You get the same parse/execution errors as a real run (for supported engines), with no committed schema or history changes.
+Requires a database. Prints a tab-separated table:
+
+`SEQ`, `STATUS`, `NAME`, `FILE_CHECKSUM`, `DB_CHECKSUM`
+
+Status values: `pending`, `applied`, `drift`, `orphan`.
+
+```bash
+sql-migration status -D postgres -h 127.0.0.1 -P 5432 -u postgres -p secret -d app_db -r ./migrations
+```
+
+## Command: `commit`
+
+Records a single migration in the history table using the file’s parsed metadata and checksum. **Does not execute** the SQL file.
+
+```bash
+sql-migration commit ./migrations/3_orders_add_index.v2026.05.14.sql \
+  -D postgres -h 127.0.0.1 -P 5432 -u postgres -p secret -d app_db
+```
+
+The path can be relative or absolute. Only `-t` / `--migrations-table` applies besides DB flags (no `-r`).
+
+## Dry-run (`migrate` only)
+
+Dry-run connects to the **real** database, runs each applicable migration SQL inside a **single transaction**, does **not** commit history, then **rolls back** the transaction. You get parse/execution errors like a real run (where supported), without persisting schema or history.
 
 - **Supported:** `postgres`, `sqlite3`
-- **Not supported:** `mysql`, `mariadb` — DDL often causes implicit commits, so rollback cannot reliably undo changes; use a database copy or validate against PostgreSQL/SQLite if you need this mode.
+- **Not supported:** `mysql`, `mariadb` — DDL often causes implicit commits; use a copy DB or another engine for transactional dry-run.
 
-`diff` and `all` behave like a normal run regarding **which files execute**; only persistence differs.
-
-Example:
+`diff` and `all` still control **which** files execute; only persistence differs.
 
 ```bash
-./migrate -D postgres -h 127.0.0.1 -P 5432 -u postgres -p secret -d app_db --dry-run
+sql-migration migrate -D postgres -h 127.0.0.1 -P 5432 -u postgres -p secret -d app_db --dry-run
 ```
 
-## Migration File Specification
+## Migration file specification
 
-- Default directory: `./migrations` (override with `-r` / `--migrations-dir` or `MIGRATE_DIR`)
-- Filename format: `<sequence>_<module>_<business_desc>.<version>.sql`
+- Default directory: `./migrations` (`-r` / `MIGRATE_DIR`; not used by `commit`)
+- Filename: `<sequence>_<module>_<business_desc>.<version>.sql`
 - Example: `99_user_add_age.v2026.05.06.sql`
-- Sequence extraction rule: the numeric part before the first underscore
-- Version tag extraction rule: the suffix before `.sql` (for example, `v2026.05.06`)
-- Execution order: ascending by sequence
+- **Sequence:** leading number before the first `_`
+- **Version tag:** segment before `.sql` (e.g. `v2026.05.06`)
+- **Order:** ascending by sequence
 
-## Migration History Table
+## Migration history table
 
-- Default table name: `migrations` (overridable with `-t`)
-- `checksum` is the lowercase hex MD5 of the migration file bytes (same format as `md5 -q` on macOS or `md5sum` on Linux)
-- Built-in unique constraint ensures one execution per sequence
-- In **diff** mode, recorded sequences are skipped; **all** mode upserts an existing row for that sequence after re-running its SQL
+- Default name: `migrations` (`-t`)
+- `checksum`: lowercase hex MD5 of file bytes (same as `md5 -q` / `md5sum`)
+- Unique constraint on `sequence`
+- **diff:** skip if sequence exists; **all:** re-execute SQL and upsert row
+- **commit:** upserts one row from the given file without running SQL
+
+## Docker
+
+Image builds binary `sql-migration` into `/bin/sql-migration`. Example:
+
+```bash
+docker run --rm sql-migration:latest sql-migration --version
+```
+
+(Replace the image name/tag with your registry build.)
 
 ## Testing
 
@@ -112,11 +166,9 @@ Example:
 go test ./...
 ```
 
-Current test coverage includes:
+Coverage includes configuration, DSN generation, migration loading/sorting/validation, SQLite integration (run modes, custom table, dry-run, failures), and inspect flows (`validate` / `status` / record-without-SQL).
 
-- Configuration validation and DSN generation
-- Migration filename validation, sorting, and duplicate sequence detection
-- SQLite integration: rerun skip logic and custom migration table support
-- Real-world scenarios: DDL + idempotent DML + failure stop and record checks
-- Run modes: `diff` vs `all` (SQLite upsert / checksum refresh)
-- Dry-run: SQLite transactional rollback and MySQL rejection
+## More documentation
+
+- **[docs/commands/](docs/commands/README.md)** — detailed documentation for each command (`migrate`, `validate`, `status`, `commit`).
+- [docs/cli.md](docs/cli.md) — compact command reference and option tables.

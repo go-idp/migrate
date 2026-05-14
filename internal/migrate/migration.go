@@ -78,6 +78,36 @@ func LoadMigrations(dir string) ([]Migration, error) {
 	return migrations, nil
 }
 
+// LoadMigrationFile reads a single migration SQL file by path (absolute or relative).
+// The basename must match the standard migration filename pattern.
+func LoadMigrationFile(path string) (Migration, error) {
+	path = filepath.Clean(path)
+	fileName := filepath.Base(path)
+	matches := migrationNamePattern.FindStringSubmatch(fileName)
+	if len(matches) == 0 {
+		return Migration{}, fmt.Errorf("invalid migration filename %q, expected: <序号>_<模块>_<业务描述>.<版本>.sql", fileName)
+	}
+
+	sequence, err := strconv.ParseInt(matches[1], 10, 64)
+	if err != nil {
+		return Migration{}, fmt.Errorf("parse migration sequence from %q: %w", fileName, err)
+	}
+
+	sqlContent, err := os.ReadFile(path)
+	if err != nil {
+		return Migration{}, fmt.Errorf("read migration file %q: %w", path, err)
+	}
+
+	return Migration{
+		Sequence:   sequence,
+		VersionTag: matches[4],
+		Name:       fileName,
+		Path:       path,
+		SQL:        string(sqlContent),
+		Checksum:   checksum(sqlContent),
+	}, nil
+}
+
 func checksum(data []byte) string {
 	sum := md5.Sum(data)
 	return hex.EncodeToString(sum[:])

@@ -13,6 +13,9 @@ func main() {
 	})
 
 	app.Register(migrate())
+	app.Register(validateCmd())
+	app.Register(statusCmd())
+	app.Register(commitCmd())
 
 	app.Run()
 }

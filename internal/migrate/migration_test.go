@@ -48,6 +48,26 @@ func TestLoadMigrations_RejectsDuplicateSequence(t *testing.T) {
 	}
 }
 
+func TestLoadMigrationFile(t *testing.T) {
+	dir := t.TempDir()
+	name := "5_svc_setup.v2026.05.07.sql"
+	content := "SELECT 5;"
+	writeMigrationFile(t, dir, name, content)
+	path := filepath.Join(dir, name)
+
+	m, err := LoadMigrationFile(path)
+	if err != nil {
+		t.Fatalf("LoadMigrationFile: %v", err)
+	}
+	if m.Sequence != 5 || m.Name != name || m.VersionTag != "v2026.05.07" {
+		t.Fatalf("unexpected metadata: %+v", m)
+	}
+	wantSum := checksum([]byte(content))
+	if m.Checksum != wantSum {
+		t.Fatalf("checksum: got %s want %s", m.Checksum, wantSum)
+	}
+}
+
 func writeMigrationFile(t *testing.T, dir string, name string, content string) {
 	t.Helper()
 	path := filepath.Join(dir, name)
