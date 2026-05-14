@@ -1,4 +1,4 @@
-module github.com/go-idp/migrate
+module github.com/go-idp/sql-migration
 
 go 1.25.0
 

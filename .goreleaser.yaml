@@ -20,4 +20,4 @@ builds:
       - -trimpath
     ldflags:
       - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{ .CommitDate }} -X main.builtBy=go-idp
-    main: ./cmd/migrate
+    main: ./cmd/sql-migration
