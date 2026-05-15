@@ -10,7 +10,7 @@ import (
 )
 
 func statusCmd() *cli.Command {
-	flags := append(migrationsPathFlags(), dbConnectionFlags()...)
+	flags := append(migrationsPathFlags(), dbConnectionFlags(true)...)
 	return &cli.Command{
 		Name:  "status",
 		Usage: "show applied, pending, drift, and orphan migrations",
@@ -24,10 +24,6 @@ func statusCmd() *cli.Command {
 				Pass:   ctx.String("pass"),
 				Name:   ctx.String("database"),
 			}
-			if err := cfg.Validate(); err != nil {
-				return err
-			}
-
 			db, normalizedDriver, err := core.MustConnect(cfg)
 			if err != nil {
 				return err

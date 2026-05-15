@@ -13,7 +13,7 @@ import (
 )
 
 func migrate() *cli.Command {
-	flags := append(dbConnectionFlags(), migrationsPathFlags()...)
+	flags := append(dbConnectionFlags(true), migrationsPathFlags()...)
 	flags = append(flags,
 		&cli.StringFlag{
 			Name:    "mode",
@@ -35,7 +35,6 @@ func migrate() *cli.Command {
 		Usage: "apply migrations",
 		Flags: flags,
 		Action: func(ctx *cli.Context) error {
-			// Collect runtime config from CLI/env and validate required fields.
 			cfg := core.Config{
 				Driver: ctx.String("driver"),
 				Host:   ctx.String("host"),
@@ -44,10 +43,6 @@ func migrate() *cli.Command {
 				Pass:   ctx.String("pass"),
 				Name:   ctx.String("database"),
 			}
-			if err := cfg.Validate(); err != nil {
-				return err
-			}
-
 			mode, err := core.ParseRunMode(ctx.String("mode"))
 			if err != nil {
 				return err

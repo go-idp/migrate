@@ -23,7 +23,13 @@ func validateCmd() *cli.Command {
 	return &cli.Command{
 		Name:  "validate",
 		Usage: "check migration files; with database, also verify history checksums",
-		Flags: append(flags, dbConnectionFlags()...),
+		Flags: append(flags, dbConnectionFlags(false)...),
+		Before: func(ctx *cli.Context) error {
+			if ctx.Bool("offline") {
+				return nil
+			}
+			return errRequiredDBFlags(ctx)
+		},
 		Action: func(ctx *cli.Context) error {
 			dir := ctx.String("migrations-dir")
 			if ctx.Bool("offline") {
@@ -42,10 +48,6 @@ func validateCmd() *cli.Command {
 				Pass:   ctx.String("pass"),
 				Name:   ctx.String("database"),
 			}
-			if err := cfg.Validate(); err != nil {
-				return err
-			}
-
 			db, normalizedDriver, err := core.MustConnect(cfg)
 			if err != nil {
 				return err

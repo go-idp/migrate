@@ -10,7 +10,7 @@ import (
 )
 
 func commitCmd() *cli.Command {
-	flags := append(migrationsTableFlags(), dbConnectionFlags()...)
+	flags := append(migrationsTableFlags(), dbConnectionFlags(true)...)
 	return &cli.Command{
 		Name:      "commit",
 		Usage:     "upsert history for a migration SQL file without executing it",
@@ -31,10 +31,6 @@ func commitCmd() *cli.Command {
 				Pass:   ctx.String("pass"),
 				Name:   ctx.String("database"),
 			}
-			if err := cfg.Validate(); err != nil {
-				return err
-			}
-
 			db, normalizedDriver, err := core.MustConnect(cfg)
 			if err != nil {
 				return err
