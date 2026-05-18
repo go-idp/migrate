@@ -96,7 +96,7 @@ func migrationsDirFlag() *cli.StringFlag {
 		Aliases: []string{"r"},
 		Usage:   "migrations directory path",
 		Value:   core.DefaultMigrationsDir,
-		EnvVars: []string{"MIGRATE_DIR"},
+		EnvVars: []string{"SQL_MIGRATION_DIR"},
 	}
 }
 

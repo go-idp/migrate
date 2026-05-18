@@ -32,10 +32,10 @@ sql-migration migrate [options]
 | `-u`, `--user` | `DB_USER` | User |
 | `-p`, `--pass` | `DB_PASS` | Password |
 | `-d`, `--database` | `DB_NAME` | Database (SQLite: path) |
-| `-r`, `--migrations-dir` | `MIGRATE_DIR` | Directory of `.sql` files (default `./migrations`) |
+| `-r`, `--migrations-dir` | `SQL_MIGRATION_DIR` | Directory of `.sql` files (default `./migrations`) |
 | `-t`, `--migrations-table` | — | History table (default `migrations`) |
-| `-m`, `--mode` | `MIGRATE_MODE` | `diff` (default) or `all` |
-| `-n`, `--dry-run` | `MIGRATE_DRY_RUN` | Transational trial run; PG/SQLite only |
+| `-m`, `--mode` | `SQL_MIGRATION_MODE` | `diff` (default) or `all` |
+| `-n`, `--dry-run` | `SQL_MIGRATION_DRY_RUN` | Transational trial run; PG/SQLite only |
 
 **Example**
 
@@ -56,7 +56,7 @@ sql-migration validate [options]
 | Flag | Env | Description |
 |------|-----|-------------|
 | `-o`, `--offline` | — | Only check files under `-r`; no DB |
-| `-r`, `--migrations-dir` | `MIGRATE_DIR` | Migrations directory |
+| `-r`, `--migrations-dir` | `SQL_MIGRATION_DIR` | Migrations directory |
 | `-t`, `--migrations-table` | — | History table |
 | *(DB flags)* | `DB_*` | Required when not `--offline` |
 

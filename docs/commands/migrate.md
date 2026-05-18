@@ -47,19 +47,19 @@ Note: **`--host` intentionally has no `-h` alias** (conflicts with global help i
 
 | Long | Short | Environment variable | Default | Description |
 |------|-------|----------------------|---------|-------------|
-| `--migrations-dir` | `-r` | `MIGRATE_DIR` | `./migrations` | Directory containing `.sql` migration files. |
+| `--migrations-dir` | `-r` | `SQL_MIGRATION_DIR` | `./migrations` | Directory containing `.sql` migration files. |
 | `--migrations-table` | `-t` | — | `migrations` | Table name for execution history. Must match `^[A-Za-z_][A-Za-z0-9_]*$`. |
 
 ### Run behavior
 
 | Long | Short | Environment variable | Default | Description |
 |------|-------|----------------------|---------|-------------|
-| `--mode` | `-m` | `MIGRATE_MODE` | `diff` | `diff` — skip already-recorded sequences. `all` — run every file and upsert history. |
-| `--dry-run` | `-n` | `MIGRATE_DRY_RUN` | `false` | See [Dry-run](#dry-run) below. |
+| `--mode` | `-m` | `SQL_MIGRATION_MODE` | `diff` | `diff` — skip already-recorded sequences. `all` — run every file and upsert history. |
+| `--dry-run` | `-n` | `SQL_MIGRATION_DRY_RUN` | `false` | See [Dry-run](#dry-run) below. |
 
 ## Dry-run
 
-When `--dry-run` / `-n` is enabled (or `MIGRATE_DRY_RUN` is true):
+When `--dry-run` / `-n` is enabled (or `SQL_MIGRATION_DRY_RUN` is true):
 
 - The runner uses a **single database transaction** for the whole dry-run.
 - It creates the history table **inside that transaction** only (rolled back at the end).

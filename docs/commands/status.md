@@ -41,7 +41,7 @@ Same as [migrate](./migrate.md#migrations-location-and-history-table) for path/t
 
 | Long | Short | Env | Default | Description |
 |------|-------|-----|---------|-------------|
-| `--migrations-dir` | `-r` | `MIGRATE_DIR` | `./migrations` | Scan this directory for `.sql` files. |
+| `--migrations-dir` | `-r` | `SQL_MIGRATION_DIR` | `./migrations` | Scan this directory for `.sql` files. |
 | `--migrations-table` | `-t` | — | `migrations` | Read history from this table. |
 | *(connection flags)* | | `DB_*` | — | Required; same as `migrate`. |
 

@@ -20,14 +20,14 @@ func migrate() *cli.Command {
 			Aliases: []string{"m"},
 			Usage:   "run mode: diff (skip applied sequences, default) | all (re-run all SQL and upsert history)",
 			Value:   string(core.RunModeDiff),
-			EnvVars: []string{"MIGRATE_MODE"},
+			EnvVars: []string{"SQL_MIGRATION_MODE"},
 		},
 		&cli.BoolFlag{
 			Name:    "dry-run",
 			Aliases: []string{"n"},
 			Usage:   "validate migrations in one transaction and roll back (postgres, sqlite3 only; not mysql)",
 			Value:   false,
-			EnvVars: []string{"MIGRATE_DRY_RUN"},
+			EnvVars: []string{"SQL_MIGRATION_DRY_RUN"},
 		},
 	)
 	return &cli.Command{

@@ -61,9 +61,9 @@ Each option can be set via CLI flag and/or `EnvVars` on that flag. With **urfave
 | `DB_USER` | same | User |
 | `DB_PASS` | same | Password |
 | `DB_NAME` | same | Database name (SQLite3: often the file path) |
-| `MIGRATE_DIR` | `migrate`, `validate`, `status` | Migrations directory (`./migrations`) |
-| `MIGRATE_MODE` | `migrate` only | `diff` or `all` (`diff`) |
-| `MIGRATE_DRY_RUN` | `migrate` only | `true` enables dry-run (`-n`) |
+| `SQL_MIGRATION_DIR` | `migrate`, `validate`, `status` | Migrations directory (`./migrations`) |
+| `SQL_MIGRATION_MODE` | `migrate` only | `diff` or `all` (`diff`) |
+| `SQL_MIGRATION_DRY_RUN` | `migrate` only | `true` enables dry-run (`-n`) |
 
 ### Common flags (connection)
 
@@ -135,7 +135,7 @@ sql-migration migrate -D postgres -h 127.0.0.1 -P 5432 -u postgres -p secret -d 
 
 ## Migration file specification
 
-- Default directory: `./migrations` (`-r` / `MIGRATE_DIR`; not used by `commit`)
+- Default directory: `./migrations` (`-r` / `SQL_MIGRATION_DIR`; not used by `commit`)
 - Filename: `<sequence>_<module>_<business_desc>.<version>.sql`
 - Example: `99_user_add_age.v2026.05.06.sql`
 - **Sequence:** leading number before the first `_`

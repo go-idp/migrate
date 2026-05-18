@@ -58,7 +58,7 @@ validate OK
 
 | Long | Short | Environment variable | Default | Description |
 |------|-------|----------------------|---------|-------------|
-| `--migrations-dir` | `-r` | `MIGRATE_DIR` | `./migrations` | Directory of `.sql` files. |
+| `--migrations-dir` | `-r` | `SQL_MIGRATION_DIR` | `./migrations` | Directory of `.sql` files. |
 | `--migrations-table` | `-t` | — | `migrations` | History table name (used in online mode). |
 
 ### Database connection (required unless `--offline`)
