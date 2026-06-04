@@ -29,12 +29,33 @@ func TestLoadMigrations_SortsBySequence(t *testing.T) {
 	}
 }
 
-func TestLoadMigrations_RejectsInvalidName(t *testing.T) {
+func TestLoadMigrations_AcceptsFlexibleName(t *testing.T) {
 	dir := t.TempDir()
 	writeMigrationFile(t, dir, "bad.sql", "SELECT 1;")
 
-	if _, err := LoadMigrations(dir); err == nil {
-		t.Fatal("expected invalid migration name error")
+	migrations, err := LoadMigrations(dir)
+	if err != nil {
+		t.Fatalf("load migrations: %v", err)
+	}
+	if len(migrations) != 1 || migrations[0].Name != "bad.sql" {
+		t.Fatalf("unexpected migrations: %+v", migrations)
+	}
+}
+
+func TestLoadMigrations_ParsesNonStandardVersionTag(t *testing.T) {
+	dir := t.TempDir()
+	name := "008_add_table_yx_member_dr_collection.ddl.20260604.sql"
+	writeMigrationFile(t, dir, name, "SELECT 8;")
+
+	migrations, err := LoadMigrations(dir)
+	if err != nil {
+		t.Fatalf("load migrations: %v", err)
+	}
+	if len(migrations) != 1 {
+		t.Fatalf("expected 1 migration, got %d", len(migrations))
+	}
+	if migrations[0].Sequence != 8 || migrations[0].VersionTag != "20260604" {
+		t.Fatalf("unexpected metadata: %+v", migrations[0])
 	}
 }
 
